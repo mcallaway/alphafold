@@ -39,13 +39,6 @@ ENV http_proxy=$proxy
 # Use bash to support string substitution.
 SHELL ["/bin/bash", "-c"]
 
-# Add the Monsanto SSL certs from 
-# git@github.platforms.engineering:CloudOps/SSL-TLS-Configuration.git
-# Start with monsanto_all.pem and split it with:
-#   csplit -f cert- ../monsanto_all.pem '/-----BEGIN CERTIFICATE-----/' '{*}'
-# Then make sure they all end with .crt (not .pem).
-COPY docker/bayer/* /usr/local/share/ca-certificates/
-
 # We need to get keys from nvidia in order to make use of their apt repo.
 RUN echo -ne "Acquire::http::proxy \"$http_proxy\";\n" > /etc/apt/apt.conf.d/40proxy
 
