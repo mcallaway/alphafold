@@ -48,22 +48,24 @@ RUN mv /etc/apt/sources.list.d/cuda.list /tmp && \
     mv /etc/apt/sources.list.d/nvidia-ml.list /tmp && \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates git ssh && \
-    curl -o - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub | apt-key add && \
-    curl -o - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub | apt-key add && \
+    curl -o - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub | apt-key add - && \
+    curl -o - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub | apt-key add - && \
     mv /tmp/cuda.list /etc/apt/sources.list.d/ && \
-    mv /tmp/nvidia-ml.list /etc/apt/sources.list.d/ && \
-    apt-get update
+    mv /tmp/nvidia-ml.list /etc/apt/sources.list.d/
 
-# Get Bayer certificates
+# Get Bayer certificates, then apt-get update of nvidia repo should work through the proxy.
 RUN --mount=type=ssh mkdir -m 700 /root/.ssh && \
     touch -m 600 /root/.ssh/known_hosts && \
-    ssh-keyscan github.platforms.engineering > /root/.ssh/known_hosts && \
+    ssh-keyscan github.com > /root/.ssh/known_hosts && \
+    ssh-keyscan github.platforms.engineering >> /root/.ssh/known_hosts && \
     cd /tmp && \
     git clone git@github.platforms.engineering:CloudOps/SSL-TLS-Configuration.git SSL-TLS-Configuration && \
     csplit -f cert- SSL-TLS-Configuration//monsanto_all.pem '/-----BEGIN CERTIFICATE-----/' '{*}' && \
     for C in cert-*; do mv $C /usr/local/share/ca-certificates/$C.crt ; done && \
-    update-ca-certificates
+    update-ca-certificates && \
+    apt-get update
 
+# Now proceed with the alphafold build.
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y \
       build-essential \
       cmake \
