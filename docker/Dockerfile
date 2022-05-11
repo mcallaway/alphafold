@@ -22,6 +22,10 @@ ARG CUDA
 # container during the build process. This environment variable
 # includes authentication credentials, which should not be saved.
 # Here we use an ARG to set the ENV to be used in the target file.
+# The build command thus looks like this:
+#   docker build \
+#     --build-arg proxy='http://<user>:<password>@10.126.80.72:8080/' \
+#     -f docker/Dockerfile -t alphafold .
 ARG proxy
 ENV http_proxy=$proxy
 
@@ -36,8 +40,7 @@ SHELL ["/bin/bash", "-c"]
 COPY docker/bayer/* /usr/local/share/ca-certificates/
 
 # We need to get keys from nvidia in order to make use of their apt repo.
-RUN echo -ne "Acquire::http::proxy \"$http_proxy\";\n" > /etc/apt/apt.conf.d/40proxy && \
-    cat /etc/apt/apt.conf.d/40proxy | od -c
+RUN echo -ne "Acquire::http::proxy \"$http_proxy\";\n" > /etc/apt/apt.conf.d/40proxy
 
 RUN mv /etc/apt/sources.list.d/cuda.list /tmp && \
     mv /etc/apt/sources.list.d/nvidia-ml.list /tmp && \
