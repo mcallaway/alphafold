@@ -22,8 +22,15 @@ ARG CUDA
 # container during the build process. This environment variable
 # includes authentication credentials, which should not be saved.
 # Here we use an ARG to set the ENV to be used in the target file.
-# The build command thus looks like this:
+# Note that for git clone to work later you'll need your ssh keys
+# in the ssh-agent. So you'd ssh-add them, or if you ssh'd to the
+# build host you would have forwarded them:
+#   ssh -X -Y $USER@$IP
+#
+# Then the build command thus looks like this:
+#   export DOCKER_BUILDKIT=1
 #   docker build \
+#     --ssh default \
 #     --build-arg proxy='http://<user>:<password>@10.126.80.72:8080/' \
 #     -f docker/Dockerfile -t alphafold .
 ARG proxy
@@ -42,18 +49,29 @@ COPY docker/bayer/* /usr/local/share/ca-certificates/
 # We need to get keys from nvidia in order to make use of their apt repo.
 RUN echo -ne "Acquire::http::proxy \"$http_proxy\";\n" > /etc/apt/apt.conf.d/40proxy
 
+# This part makes use of the https_proxy in apt.conf.d above, gets the nvidia keys,
+# and installs tools we need to proceed.
 RUN mv /etc/apt/sources.list.d/cuda.list /tmp && \
     mv /etc/apt/sources.list.d/nvidia-ml.list /tmp && \
     apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates git ssh && \
     curl -o - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub | apt-key add && \
     curl -o - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub | apt-key add && \
     mv /tmp/cuda.list /etc/apt/sources.list.d/ && \
     mv /tmp/nvidia-ml.list /etc/apt/sources.list.d/ && \
+    apt-get update
+
+# Get Bayer certificates
+RUN --mount=type=ssh mkdir -m 700 /root/.ssh && \
+    touch -m 600 /root/.ssh/known_hosts && \
+    ssh-keyscan github.platforms.engineering > /root/.ssh/known_hosts && \
+    cd /tmp && \
+    git clone git@github.platforms.engineering:CloudOps/SSL-TLS-Configuration.git SSL-TLS-Configuration && \
+    csplit -f cert- SSL-TLS-Configuration//monsanto_all.pem '/-----BEGIN CERTIFICATE-----/' '{*}' && \
+    for C in cert-*; do mv $C /usr/local/share/ca-certificates/$C.crt ; done && \
     update-ca-certificates
 
-RUN apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y \
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y \
       build-essential \
       cmake \
       cuda-command-line-tools-${CUDA/./-} \
