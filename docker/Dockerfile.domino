@@ -1,0 +1,171 @@
+
+# This is our current Default (as of May 2022)
+#FROM quay.io/domino/base:Ubuntu18_DAD_Py3.8_R4.0-20210126
+# Switch to CUDA enabled...
+FROM quay.io/domino/base:Ubuntu18_DAD_Py3.8_R4.0-20210503_CUDA11 AS base
+
+## Set the default AWS region
+ENV AWS_REGION='us-east-1'
+
+## Allow for Bayer corporate proxy
+ARG proxy
+ENV http_proxy=$proxy
+
+RUN echo -ne "Acquire::http::proxy \"$http_proxy\";\n" > /etc/apt/apt.conf.d/40proxy
+
+RUN --mount=type=ssh mkdir -m 700 /root/.ssh && \
+    touch -m 600 /root/.ssh/known_hosts && \
+    sed -i"" -e 's/^/#/' /etc/apt/sources.list.d/sbt.list && \
+    apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys A4B469963BF863CC && \
+    ssh-keyscan github.com > /root/.ssh/known_hosts && \
+    ssh-keyscan github.platforms.engineering >> /root/.ssh/known_hosts && \
+    #mv /etc/apt/sources.list.d/cuda.list /tmp && \
+    cd /tmp && \
+    git clone git@github.platforms.engineering:CloudOps/SSL-TLS-Configuration.git SSL-TLS-Configuration && \
+    csplit -f cert- SSL-TLS-Configuration//monsanto_all.pem '/-----BEGIN CERTIFICATE-----/' '{*}' && \
+    for C in cert-*; do mv $C /usr/local/share/ca-certificates/$C.crt ; done && \
+    apt-get install --reinstall ca-certificates && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall \
+    ca-certificates && \
+    update-ca-certificates
+
+RUN wget -qO - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/3bf863cc.pub > /etc/apt/trusted.gpg.d/3bf863cc.pub && \
+    wget -qO - http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub > /etc/apt/trusted.gpg.d/7fa2af80.pub && \
+    wget -qO - http://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc                       > /etc/apt/trusted.gpg.d/marutter_pubkey.asc && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    curl \
+    ca-certificates \
+    git \
+    ssh \
+    software-properties-common \
+    dirmngr \
+    aria2
+
+RUN chmod +x /opt/conda/bin/conda
+
+FROM base AS prereq
+
+## Mamba is a faster dependency resolver for conda
+RUN /opt/conda/bin/conda install -c conda-forge mamba
+
+RUN /opt/conda/bin/mamba install -c conda-forge \
+  biopython==1.78 \
+  psycopg2==2.8.6 \
+  xarray==0.18.0 \
+  msal==1.11.0 \
+  jupyter_contrib_nbextensions==0.5.1 \
+  jupyter_nbextensions_configurator==0.4.1 \
+  nbbrowserpdf=0.2.0 \
+  orjson==3.5.2 \
+  structlog==21.1.0 \
+  google-auth-oauthlib==0.4.4 \
+  grpcio==1.33.2 \
+  rdkit==2021.03.1 \
+  aiofiles==0.6.0 \
+  inflection==0.5.1
+
+### Remove conda access
+RUN chmod -x /opt/conda/bin/conda
+
+### Update pip
+RUN /opt/conda/bin/python -m pip install --upgrade pip
+
+## Internal Packages
+RUN pip install --extra-index-url https://pypi.science-at-scale.io \
+  serene==0.8.6 \
+  osmosis==0.1.6 \
+  ssodomino==0.0.2 \
+  pbr==5.5.1 \
+  bayer-aws-sso==2.0.11 \
+  vaultaccess==0.0.3
+
+## These need to run after internal packages are installed for dependency issues
+RUN pip install \
+  pandas-gbq==0.15.0 \
+  datarobot==2.24 \
+  sagemaker==2.40.0 \
+  pbr==5.6.0 \
+  aiologger==0.6.1
+
+### Potential Issues
+# Data Robot may need to be changed to match current server version (7.0.1)
+# Matplotlib may need to use version 2.2.4 instead of 3.3 upgrade
+# pandas-gbq required downgrade of attrs, which conflicts with serene/osmosis and others
+# product360 (internal) conflicts with tensorflow-gpu
+
+## Setup Jupyter NBExtensions
+USER ubuntu
+RUN jupyter contrib nbextension install --user
+RUN jupyter nbextensions_configurator enable
+USER root
+
+# R Stuff
+## External packages
+RUN R --no-save -e "install.packages(c('mlr', 'purrrlyr', 'configr', 'bigrquery', 'paws'), repos='https://cran.rstudio.com')"
+
+## Internal packages
+RUN R --no-save -e "install.packages(c('historianRClient', 'azurequest', 'entVaultR'), repos='https://cran.science-at-scale.io')"
+
+# Julia ADDONS
+USER ubuntu
+RUN julia -e 'using Pkg; Pkg.update(); Pkg.add("MixedModels"); Pkg.add("Plots"); Pkg.add("DataFrames"); Pkg.add("Gadfly"); Pkg.add("Weave"); Pkg.add("ProgressMeter"); Pkg.add("PyCall"); Pkg.add("RCall"); Pkg.add("HTTP"); Pkg.add("CSV"); Pkg.add("JuMP"); Pkg.add("ScikitLearn");'
+USER root
+
+RUN chown -R ubuntu:ubuntu /home/ubuntu/.config
+
+# Fix Git certificate issues
+RUN apt update && apt-get install --reinstall ca-certificates && update-ca-certificates
+RUN apt install -y libgnutls30
+
+# Hacker MODE (uncomment next line for root access in terminal)
+# RUN echo "ubuntu    ALL=NOPASSWD: ALL" >> /etc/sudoers
+
+FROM prereq AS alphafold
+
+## Alphafold prereqs
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  build-essential \
+  cmake \
+#  cuda-command-line-tools \
+  git \
+  hmmer \
+  kalign \
+  tzdata \
+  wget \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/soedinglab/hh-suite /tmp/hh-suite \
+  && mkdir /tmp/hh-suite/build \
+  && pushd /tmp/hh-suite/build \
+  && cmake -DCMAKE_INSTALL_PREFIX=/opt/hhsuite .. \
+  && make -j 4 && make install \
+  && ln -s /opt/hhsuite/bin/* /usr/bin \
+  && popd \
+  && rm -rf /tmp/hh-suite
+
+RUN mamba install -y -c conda-forge \
+    openmm=7.5.1 \
+    cudatoolkit=10.1.243 \
+    pdbfixer=1.7
+
+COPY . /app/alphafold
+
+RUN wget -q -P /app/alphafold/alphafold/common/ \
+  https://git.scicore.unibas.ch/schwede/openstructure/-/raw/7102c63615b64735c4941278d92b554ec94415f8/modules/mol/alg/src/stereo_chemical_props.txt
+
+RUN pip install -r /app/alphafold/requirements.txt \
+    && pip install --upgrade jax==0.2.14 jaxlib==0.1.69 -f \
+      https://storage.googleapis.com/jax-releases/jax_releases.html
+
+WORKDIR /opt/conda/lib/python3.8/site-packages
+RUN patch -p0 < /app/alphafold/docker/openmm.patch
+RUN chmod u+s /sbin/ldconfig.real
+
+WORKDIR /app/alphafold
+RUN echo $'#!/bin/bash\n\
+ldconfig\n\
+python /app/alphafold/run_alphafold.py "$@"' > /app/run_alphafold.sh \
+  && chmod +x /app/run_alphafold.sh
+
